@@ -1,0 +1,30 @@
+# Required to interact with the API
+swarm_name: "hvm"
+
+# Desired client name on the network 
+node_name: "hvm_client"
+
+# Change this network configuration to match your desired network interface
+mule_network: "enxc03ebad2cd9c"
+ip_prefix: "192.168.2.0"
+ip_netmask: "255.255.255.0"
+
+# Network ports that the Hovermap API operates over
+ping_port: 8123
+min_port: 49172
+max_port: 49192
+
+bridge:
+  volatile:
+    publications:
+      - topic: pointcloud
+        type: sensor_msgs/PointCloud2
+      - topic: tf
+        type: tf2_msgs/TFMessage
+      - topic: odometry
+        type: nav_msgs/Odometry
+  persistent:
+    logs: {}
+    publications:
+      - topic: tf_static
+        type: tf2_msgs/TFMessage

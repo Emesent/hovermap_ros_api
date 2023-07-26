@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <arg name="primary" default="true"/>
+
+  <group if="$(arg primary)">
+    <test test-name="test_bridge" pkg="mule_bridge" type="test_bridge" time-limit="30.0" if="$(arg primary)"/>
+
+    <node name="pub" pkg="rostopic" type="rostopic" args="pub --rate 1 /test_persistent std_msgs/String 'data: &quot;Hello&quot;'"/>
+
+    <node name="mule_bridge" pkg="mule_bridge" type="mule_bridge" required="true" output="log" if="$(arg primary)">
+      <param name="node_name" value="test_node_1"/>
+      <rosparam command="load">
+      bridge:
+        volatile:
+          publications:
+            - topic: /test_volatile
+              type: std_msgs/String
+        persistent:
+          logs:
+            test_log:
+              trunc: True
+              subscriptions:
+                - topic: /test_persistent
+                  type: std_msgs/String
+      </rosparam>
+    </node>
+
+  </group>
+
+  <group unless="$(arg primary)">
+
+    <node name="transform" pkg="topic_tools" type="transform" args="/test_persistent /test_volatile std_msgs/String 'std_msgs.msg.String(data=m.data + &quot; World&quot;)' --import std_msgs --wait-for-start"/>
+
+    <node name="mule_bridge" pkg="mule_bridge" type="mule_bridge" required="true" output="log">
+      <param name="node_name" value="test_node_2"/>
+      <rosparam command="load">
+        bridge:
+          volatile:
+            flows:
+              test_flow:
+                sndhwm: 1
+                subscriptions:
+                  - topic: /test_volatile
+                    type: std_msgs/String
+          persistent:
+            publications:
+              - topic: /test_persistent
+                type: std_msgs/String
+      </rosparam>
+    </node>
+
+  </group>
+
+</launch>

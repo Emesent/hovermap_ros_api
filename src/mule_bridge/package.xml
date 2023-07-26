@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mule_bridge</name>
+  <version>1.0.0</version>
+  <description>Disruption tolerant message bridging for multimaster ROS setups</description>
+
+  <!-- Emesent maintainer -->
+  <maintainer email="raghav.mishra@emesent.io">Raghav Mishra</maintainer>
+
+  <license>Proprietary</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>mule_bridge_msgs</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <test_depend>rosunit</test_depend>
+  <test_depend>rostest</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>topic_tools</test_depend>
+  <export>
+    <pip_requirements>requirements.txt</pip_requirements>
+  </export>
+</package>

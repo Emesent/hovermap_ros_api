@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>hovermap_api</name>
+  <version>0.0.0</version>
+  <description>The ROS Hovermap API</description>
+
+  <maintainer email="raghav.mishra@emesent.io">Raghav Mishra</maintainer>
+
+  <license>Proprietary</license>
+
+  <!-- Dependencies -->
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>mule_bridge</exec_depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
+
+
+</package>

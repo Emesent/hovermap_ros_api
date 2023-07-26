@@ -1,0 +1,479 @@
+#!/usr/bin/env python
+
+import collections
+import functools
+import logging
+import os
+import pickle
+import time
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
+
+import mule_bridge_msgs.msg as msg
+import mule_bridge_msgs.srv as srv
+import rosgraph
+import roslib.message
+import rospy
+import rospy.rostime
+import zmq
+from tornado.ioloop import IOLoop
+from zmq.eventloop.zmqstream import ZMQStream
+
+import mule_bridge
+
+
+def _fetch_master_topics(max_retries: int) -> Dict[str, str]:
+    """Fetch topic names and types from the ROS master via XMLRPC."""
+    master = rosgraph.Master(rospy.get_name())
+    master_topics = None
+    retries = 0
+    # ROS xmlrpc calls may fail intermittently, try multiple times before aborting
+    while master_topics is None:
+        try:
+            master_topics = dict(cast(list, master.getTopicTypes()))
+        except rosgraph.MasterException as exc:
+            retries += 1
+            if retries < max_retries:
+                time.sleep(1)  # Don't use rospy.sleep, use wall-clock
+            else:
+                raise RuntimeError("Failed to get master topic types") from exc
+    return master_topics
+
+
+def _resolve_topics(
+    master_topics: Dict[str, str],
+    param_path: str,
+    type_name: str,
+    namespaces: Optional[List[str]],
+    topic_base: str,
+) -> List[Tuple[str, Type]]:
+    """Resolve topic configuration fields to an absolute topic name and msg class."""
+    try:
+        msg_cls = roslib.message.get_message_class(type_name)
+    except ValueError:
+        raise RuntimeError(
+            f"Invalid param for {param_path}/type: {type_name} is not a recognised type"
+        )
+    topic_names = (
+        [topic_base]
+        if namespaces is None
+        else [f"{namespace}/{topic_base}" for namespace in namespaces]
+    )
+    resolved_topics = []
+    for topic_name in topic_names:
+        resolved_topic_name = rospy.resolve_name(topic_name)
+        rospy.logdebug(f"Resolved topic {topic_name} to {resolved_topic_name}")
+        required_type_name = master_topics.get(resolved_topic_name, None)
+        if required_type_name is not None and required_type_name != type_name:
+            raise RuntimeError(
+                f"Invalid param for {param_path}: topic {topic_name} has already been registered with the type {required_type_name}"
+            )
+        resolved_topics.append((topic_name, msg_cls))
+    return resolved_topics
+
+
+def _marshall_param(
+    param_path: str,
+    cls,
+    obj,
+):
+    """Marshall ROS params into an expected type."""
+    if hasattr(cls, "__annotations__"):
+        # handle NamedTuple
+        if isinstance(obj, dict):
+            return cls(
+                **{
+                    k: _marshall_param(param_path + f"/{k}", v, obj[k])
+                    for k, v in cls.__annotations__.items()
+                    if k in obj
+                }
+            )
+    elif hasattr(cls, "__origin__"):
+        if cls.__origin__ == list:
+            # handle List[X]
+            if isinstance(obj, list):
+                return [
+                    _marshall_param(param_path + f"/{i}", cls.__args__[0], x)
+                    for i, x in enumerate(obj)
+                ]
+        elif cls.__origin__ == dict:
+            # handle Dict[K, V]
+            if isinstance(obj, dict):
+                return {
+                    _marshall_param(
+                        param_path + f"/{k}", cls.__args__[0], k
+                    ): _marshall_param(param_path + f"/{k}", cls.__args__[1], v)
+                    for k, v in obj.items()
+                }
+            elif obj == "":
+                return dict()
+        elif (
+            cls.__origin__ == Union
+            and len(cls.__args__) == 2
+            and cls.__args__[1] == type(None)
+        ):
+            # handle Optional[X]
+            return (
+                None
+                if obj is None
+                else _marshall_param(param_path, cls.__args__[0], obj)
+            )
+        else:
+            assert False, f"Unsupported type annotation: {cls.__origin__}"
+    else:
+        # handle primitive
+        if isinstance(obj, cls):
+            return obj
+    raise RuntimeError(
+        f"Invalid param at {param_path}: {obj} (expected type: {cls}, actual type: {type(obj)})"
+    )
+
+
+class TeeHandler(logging.Handler):
+    """A logging handler for copying records to another logger."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        logging.Handler.__init__(self)
+        self._logger = logger
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._logger.log(record.levelno, self.format(record))
+
+
+class Pipe:
+    """A one-way thread-safe communication pipe."""
+
+    def __init__(
+        self,
+        ioloop: IOLoop,
+        zcontext: zmq.Context,
+        name: str,
+        callback: Callable[[bytes], None],
+    ) -> None:
+        self._zpair_sock0 = zcontext.socket(zmq.PAIR)
+        self._zpair_sock0.setsockopt(zmq.LINGER, 0)
+        self._zpair_sock1 = zcontext.socket(zmq.PAIR)
+        self._zpair_sock1.setsockopt(zmq.LINGER, 0)
+
+        # Allow multiple mule_bridge processes to coexist
+        pid = os.getpid()
+        pair_address = f"inproc://mule_bridge_{pid}_{name}"
+        self._zpair_sock0.bind(pair_address)
+        self._zpair_sock1.connect(pair_address)
+
+        self._zpair_stream = ZMQStream(self._zpair_sock1, ioloop)
+        self._zpair_stream.on_recv(self._recv)
+        self._callback = callback
+
+    def _recv(self, frames) -> None:
+        self._callback(pickle.loads(frames[0]))
+
+    def send(self, obj: Any) -> None:
+        self._zpair_sock0.send(pickle.dumps(obj, 2))
+
+
+class Subscriber:
+    """A wrapper for a ROS subscriber."""
+
+    def __init__(self, topic_name: str, pipe: Pipe) -> None:
+        self._caller_id = rospy.get_caller_id()
+        self._sub = rospy.Subscriber(
+            topic_name, rospy.AnyMsg, callback=self._recv_sub_msg, queue_size=None
+        )
+        self._pipe = pipe
+
+    def _recv_sub_msg(self, msg: rospy.AnyMsg) -> None:
+        """Handle a message from the subscriber (in the rospy thread)."""
+        if msg._connection_header.get("mule_bridge") == self._caller_id:
+            return  # ignore our own publications
+        self._pipe.send(msg._buff)
+
+
+class Publisher:
+    """A wrapper for a ROS publisher."""
+
+    def __init__(self, topic_name: str, msg_cls: type) -> None:
+        self._caller_id = rospy.get_caller_id()
+        self._pub = rospy.Publisher(
+            topic_name,
+            msg_cls,
+            queue_size=0,
+            headers={"mule_bridge": self._caller_id},
+        )
+
+    def publish(self, buff: bytes) -> None:
+        """Publishes the buff as a pre-serialised ROS message."""
+        msg = rospy.AnyMsg()
+        msg._buff = buff
+        self._pub.publish(msg)
+
+
+class Node:
+    """A ROS node interface to a mule bridge client."""
+
+    def __init__(self) -> None:
+        rospy.init_node("mule_bridge", anonymous=False)
+
+        # Send tornado logging messages to rosout
+        self._logger = logging.getLogger("rosout")
+        logging.getLogger("tornado").addHandler(TeeHandler(self._logger))
+        logging.getLogger("mule_bridge").addHandler(TeeHandler(self._logger))
+
+        self._config = cast(
+            mule_bridge.Config,
+            _marshall_param("~", mule_bridge.Config, rospy.get_param("~", {})),
+        )
+
+        self._clock = rospy.get_time
+        self._ioloop = cast(IOLoop, IOLoop.current())
+        self._zcontext = zmq.Context.instance()
+
+        self._topic_msgs = collections.defaultdict(msg.Topic)
+        self._status_pub = rospy.Publisher("~status", msg.Status, queue_size=1)
+
+        self._volatile_subs: List[Subscriber] = []
+        self._volatile_pubs: Dict[str, Publisher] = {}
+        self._persistent_subs: List[Subscriber] = []
+        self._persistent_pubs: Dict[str, Publisher] = {}
+
+        self._set_overlay_srv = rospy.Service(
+            "~set_overlay",
+            srv.SetOverlay,
+            self._set_overlay,
+        )
+
+        self._setup_topics()
+        self._setup_client()
+
+        self._ioloop.add_callback(self._check_shutdown)
+        self._ioloop.add_callback(self._publish_status)
+
+    def _set_overlay(self, req: srv.SetOverlayRequest) -> srv.SetOverlayResponse:
+        """Set the overlay network."""
+        self._ioloop.add_callback(self._client.set_overlay, req.node_names)
+        return srv.SetOverlayResponse()
+
+    def _bridge_volatile(
+        self, flow_name: str, topic_name: str, msg_buff: bytes
+    ) -> None:
+        """Bridge volatile topic data to the swarm."""
+        topic = self._topic_msgs[topic_name]
+        topic.volatile_sub_msg_count += 1
+        topic.volatile_sub_raw_size += len(msg_buff)
+        topic.volatile_sub_bridged_size += self._client.bridge_volatile(
+            msg_buff, flow_name, topic_name
+        )
+
+    def _bridge_persistent(
+        self, log_name: str, topic_name: str, msg_buff: bytes
+    ) -> None:
+        """Bridge persistent topic data to the swarm."""
+        topic = self._topic_msgs[topic_name]
+        topic.persistent_sub_msg_count += 1
+        topic.persistent_sub_raw_size += len(msg_buff)
+        topic.persistent_sub_bridged_size += self._client.bridge_persistent(
+            msg_buff, log_name, topic_name
+        )
+
+    def _make_pub(self, topic_name, msg_cls):
+        rospy.logdebug(f"Making pub on topic {topic_name}")
+        topic = self._topic_msgs[topic_name]
+        topic.topic_name = topic_name
+        topic.type_name = msg_cls._type
+        topic.type_md5sum = msg_cls._md5sum
+        return Publisher(topic_name, msg_cls)
+
+    def _make_sub(self, topic_name, msg_cls, callback):
+        rospy.logdebug(f"Making sub on topic {topic_name}")
+        topic = self._topic_msgs[topic_name]
+        topic.topic_name = topic_name
+        topic.type_name = msg_cls._type
+        topic.type_md5sum = msg_cls._md5sum
+        pipe = Pipe(self._ioloop, self._zcontext, topic_name, callback)
+        return Subscriber(topic_name, pipe)
+
+    def _setup_topics(self) -> None:
+        """Setup topic subscriptions and publications."""
+
+        master_topics = _fetch_master_topics(5)
+
+        for flow_name, flow in self._config.bridge.volatile.flows.items():
+            param_path = f"bridge/volatile/flows/{flow_name}"
+            for subscription in flow.subscriptions:
+                for topic_name, msg_cls in _resolve_topics(
+                    master_topics,
+                    param_path,
+                    subscription.type,
+                    subscription.namespaces,
+                    subscription.topic,
+                ):
+                    self._volatile_subs.append(
+                        self._make_sub(
+                            topic_name,
+                            msg_cls,
+                            functools.partial(
+                                self._bridge_volatile, flow_name, topic_name
+                            ),
+                        )
+                    )
+
+        for index, publication in enumerate(self._config.bridge.volatile.publications):
+            param_path = f"bridge/volatile/publications/{index}"
+            for topic_name, msg_cls in _resolve_topics(
+                master_topics,
+                param_path,
+                publication.type,
+                publication.namespaces,
+                publication.topic,
+            ):
+                if topic_name in self._volatile_pubs:
+                    raise RuntimeError(
+                        f"Invalid param for {param_path}: topic {topic_name} is already bridged by another volatile publication"
+                    )
+
+                self._volatile_pubs[topic_name] = self._make_pub(topic_name, msg_cls)
+
+        for log_name, log in self._config.bridge.persistent.logs.items():
+            param_path = f"bridge/persistent/logs/{log_name}"
+            for subscription in log.subscriptions:
+                for topic_name, msg_cls in _resolve_topics(
+                    master_topics,
+                    param_path,
+                    subscription.type,
+                    subscription.namespaces,
+                    subscription.topic,
+                ):
+                    self._persistent_subs.append(
+                        self._make_sub(
+                            topic_name,
+                            msg_cls,
+                            functools.partial(
+                                self._bridge_persistent, log_name, topic_name
+                            ),
+                        )
+                    )
+
+        for index, publication in enumerate(
+            self._config.bridge.persistent.publications
+        ):
+            param_path = f"bridge/persistent/publications/{index}"
+            for topic_name, msg_cls in _resolve_topics(
+                master_topics,
+                param_path,
+                publication.type,
+                publication.namespaces,
+                publication.topic,
+            ):
+                if topic_name in self._persistent_pubs:
+                    raise RuntimeError(
+                        f"Invalid param for {param_path}: topic {topic_name} is already bridged by another persistent publication"
+                    )
+                self._persistent_pubs[topic_name] = self._make_pub(topic_name, msg_cls)
+
+        self._logger.info("Delay started (give subscribers time to connect)")
+        time.sleep(self._config.initial_wait)  # Don't use rospy.sleep, use wall-clock
+        self._logger.info("Delay finished")
+
+    def _publish_volatile(self, args: mule_bridge.VolatileCallbackArgs) -> None:
+        """Publish volatile topic data."""
+        self._volatile_pubs[args.topic_name].publish(args.msg_buff)
+        topic = self._topic_msgs[args.topic_name]
+        topic.volatile_pub_msg_count += 1
+        topic.volatile_pub_raw_size += len(args.msg_buff)
+        topic.volatile_pub_bridged_size += args.bridged_size
+
+    def _publish_persistent(self, args: mule_bridge.PersistentCallbackArgs) -> None:
+        """Publish persistent topic data."""
+        self._persistent_pubs[args.topic_name].publish(args.msg_buff)
+        topic = self._topic_msgs[args.topic_name]
+        topic.persistent_pub_msg_count += 1
+        topic.persistent_pub_raw_size += len(args.msg_buff)
+        topic.persistent_pub_bridged_size += args.bridged_size
+
+    def _setup_client(self) -> None:
+        """Setup the Client."""
+        self._node_uuid = uuid.uuid4().bytes
+        self._client = mule_bridge.Client(
+            self._clock,
+            self._config,
+            self._ioloop,
+            self._zcontext,
+            self._node_uuid,
+            list(self._volatile_pubs.keys()),
+            list(self._persistent_pubs.keys()),
+        )
+        self._client.on_volatile(self._publish_volatile)
+        self._client.on_persistent(self._publish_persistent)
+
+    def _publish_status(self) -> None:
+        """Publish a status message."""
+        self._ioloop.call_later(self._config.status_period, self._publish_status)
+
+        def make_tail_msg(tail):
+            node_uuid, log_name, trunc, index = tail
+            tail_msg = msg.LogIndex()
+            tail_msg.node_uuid = node_uuid
+            tail_msg.log_name = log_name
+            tail_msg.trunc = trunc
+            tail_msg.index = index
+            return tail_msg
+
+        def make_manifest_msg(manifest):
+            manifest_msg = msg.Manifest()
+            manifest_msg.seq = manifest.seq
+            manifest_msg.tails = [make_tail_msg(tail) for tail in manifest.tails]
+            return manifest_msg
+
+        def make_peer_msg(peer):
+            peer_msg = msg.Peer()
+            peer_msg.node_uuid = peer.node_uuid
+            peer_msg.node_name = peer.node_name
+            peer_msg.generation = peer.generation
+            peer_msg.rtt_mean_secs = peer.rtt_mean_secs
+            peer_msg.rtt_success_count = peer.rtt_success_count
+            peer_msg.rtt_failure_count = peer.rtt_failure_count
+            peer_msg.manifest_time = rospy.Time.from_sec(peer.manifest_time)
+            peer_msg.manifest = make_manifest_msg(peer.manifest)
+            peer_msg.sync_up_time = rospy.Time.from_sec(peer.sync_up_time)
+            peer_msg.sync_down_time = rospy.Time.from_sec(peer.sync_down_time)
+            peer_msg.sync_up_size = peer.sync_up_size
+            peer_msg.sync_down_size = peer.sync_down_size
+            peer_msg.sync_down_used_size = peer.sync_down_used_size
+            peer_msg.sync_down_budget_size = peer.sync_down_budget_size
+            peer_msg.send_hello_request_count = peer.send_hello_request_count
+            peer_msg.recv_hello_request_count = peer.recv_hello_request_count
+            peer_msg.send_hello_reply_count = peer.send_hello_reply_count
+            peer_msg.recv_hello_reply_count = peer.recv_hello_reply_count
+            peer_msg.send_sync_request_count = peer.send_sync_request_count
+            peer_msg.recv_sync_request_count = peer.recv_sync_request_count
+            peer_msg.send_sync_reply_count = peer.send_sync_reply_count
+            peer_msg.recv_sync_reply_count = peer.recv_sync_reply_count
+            return peer_msg
+
+        status_msg = msg.Status()
+        status_msg.swarm_name = self._config.swarm_name
+        status_msg.node_uuid = self._node_uuid
+        status_msg.node_name = self._config.node_name
+        manifest_time, manifest = self._client.get_history().peek()
+        status_msg.manifest_time = rospy.Time.from_sec(manifest_time)
+        status_msg.manifest = make_manifest_msg(manifest)
+        status_msg.peers = [make_peer_msg(peer) for peer in self._client.get_peers()]
+        status_msg.topics = [topic_msg for topic_msg in self._topic_msgs.values()]
+        self._status_pub.publish(status_msg)
+
+    def _check_shutdown(self) -> None:
+        """Check shutdown conditions and stop the event-loop and ROS node if they are met."""
+        self._ioloop.call_later(0.5, self._check_shutdown)
+        if rospy.is_shutdown():
+            self._logger.debug("Stopping IO loop")
+            self._ioloop.stop()
+
+    def run(self) -> None:
+        """Start the event-loop."""
+        self._logger.debug("Starting IO loop")
+        self._ioloop.start()
+
+
+if __name__ == "__main__":
+    node = Node()
+    node.run()

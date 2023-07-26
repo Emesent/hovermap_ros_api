@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- add ns:=<your_namespace> if you need to avoid topic name collistions-->
+    <node pkg="mule_bridge" name="hovermap_api_mule" type="mule_bridge" required="true" output="screen">
+        <rosparam command="load" file="$(find hovermap_api)/config/mule.yaml"/>
+    </node>
+</launch>

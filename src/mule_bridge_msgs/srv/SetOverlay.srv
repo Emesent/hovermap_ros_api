@@ -1,0 +1,5 @@
+# Restrict outgoing sync requests to certain peers listed by node name
+# Note: an empty list is interpreted as 'no restrictions'
+string[] node_names
+
+---
