@@ -13,6 +13,13 @@ catkin_package(CATKIN_DEPENDS
   tf2_ros
 )
 
+catkin_install_python(
+    PROGRAMS
+    scripts/configure_perception
+    DESTINATION 
+    ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+
 install(DIRECTORY
     launch
     DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
