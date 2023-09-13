@@ -16,6 +16,13 @@ max_port: 49192
 
 bridge:
   volatile:
+    flows:
+      configuration:
+        ip_tos: 0x30
+        sndhwm: 1000
+        subscriptions:
+          - topic: perception_configuration
+            type: std_msgs/String
     publications:
       - topic: pointcloud
         type: sensor_msgs/PointCloud2
