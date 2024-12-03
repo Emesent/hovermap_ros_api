@@ -25,7 +25,7 @@ mkdir -p hovermap_ros_api/src
 cd hovermap_ros_api/src
 git clone git@github.com:Emesent/hovermap_ros_api.git
 rosdep install --from-paths src --ignore-src --rosdistro=${ROS_DISTRO} -y
-python3 -m pip install -r mule_bridge/requirements.txt
+python3 -m pip install -r hovermap_ros_api/src/mule_bridge/requirements.txt
 ```
 
 ### 2. Enable the Hovermap API
