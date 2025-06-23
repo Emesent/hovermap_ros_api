@@ -3,7 +3,7 @@
   <name>mule_bridge</name>
   <version>1.0.0</version>
   <description>Disruption tolerant message bridging for multimaster ROS setups</description>
-
+  
   <!-- Emesent maintainer -->
   <maintainer email="raghav.mishra@emesent.io">Raghav Mishra</maintainer>
 

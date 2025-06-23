@@ -3,8 +3,8 @@ on_miss: -20             # unitless
 occupied_threshold: 500  # unitless
 occupied_min: -200       # unitless
 occupied_max: 1100       # unitless
-voxel_size: 0.05         # meters
+voxel_size: 0.2          # meters
 dimensions:
-  x: 256                 # number of voxels > 0
-  y: 256                 # number of voxels > 0
-  z: 90                  # number of voxels > 0
+  x: 160                 # number of voxels > 0
+  y: 160                 # number of voxels > 0
+  z: 100                  # number of voxels > 0

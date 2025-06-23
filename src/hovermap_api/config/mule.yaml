@@ -21,10 +21,12 @@ bridge:
         ip_tos: 0x30
         sndhwm: 1000
         subscriptions:
-          - topic: perception_configuration
+          - topic: occupancy_grid_map/configuration
             type: std_msgs/String
     publications:
-      - topic: pointcloud
+      - topic: lidar/corrected
+        type: sensor_msgs/PointCloud2
+      - topic: occupancy_grid_map/data
         type: sensor_msgs/PointCloud2
       - topic: tf
         type: tf2_msgs/TFMessage
