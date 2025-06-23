@@ -68,7 +68,7 @@ def _resolve_topics(
             raise RuntimeError(
                 f"Invalid param for {param_path}: topic {topic_name} has already been registered with the type {required_type_name}"
             )
-        resolved_topics.append((topic_name, msg_cls))
+        resolved_topics.append((resolved_topic_name, msg_cls))
     return resolved_topics
 
 
@@ -307,6 +307,10 @@ class Node:
                     subscription.namespaces,
                     subscription.topic,
                 ):
+                    if msg_cls is None:
+                        rospy.logerr(f"Unable to resolve type for topic: {topic_name}")
+                        continue
+
                     self._volatile_subs.append(
                         self._make_sub(
                             topic_name,
@@ -330,6 +334,9 @@ class Node:
                     raise RuntimeError(
                         f"Invalid param for {param_path}: topic {topic_name} is already bridged by another volatile publication"
                     )
+                if msg_cls is None:
+                    rospy.logerr(f"Unable to resolve type for topic: {topic_name}")
+                    continue
 
                 self._volatile_pubs[topic_name] = self._make_pub(topic_name, msg_cls)
 
@@ -343,6 +350,10 @@ class Node:
                     subscription.namespaces,
                     subscription.topic,
                 ):
+                    if msg_cls is None:
+                        rospy.logerr(f"Unable to resolve type for topic: {topic_name}")
+                        continue
+
                     self._persistent_subs.append(
                         self._make_sub(
                             topic_name,
@@ -368,6 +379,11 @@ class Node:
                     raise RuntimeError(
                         f"Invalid param for {param_path}: topic {topic_name} is already bridged by another persistent publication"
                     )
+                
+                if msg_cls is None:
+                    rospy.logerr(f"Unable to resolve type for topic: {topic_name}")
+                    continue
+
                 self._persistent_pubs[topic_name] = self._make_pub(topic_name, msg_cls)
 
         self._logger.info("Delay started (give subscribers time to connect)")

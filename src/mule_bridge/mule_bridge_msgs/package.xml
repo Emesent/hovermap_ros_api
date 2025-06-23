@@ -3,7 +3,6 @@
   <name>mule_bridge_msgs</name>
   <version>1.0.0</version>
   <description>Message definitions for mule_bridge.</description>
-  <maintainer email="alex.pitt@csiro.au">Alex Pitt</maintainer>
   <!-- Emesent maintainer -->
   <maintainer email="raghav.mishra@emesent.io">Raghav Mishra</maintainer>
   <license>Proprietary</license>

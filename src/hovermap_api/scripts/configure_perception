@@ -7,13 +7,13 @@ from std_msgs.msg import String
 def get_perception_config() -> str:
     rospack = rospkg.RosPack()
     pkg_path = rospack.get_path("hovermap_api")
-    config_yaml = open(pkg_path + "/config/perception_config.yaml").read()
+    config_yaml = open(f"{pkg_path}/config/perception_config.yaml").read()
     return config_yaml
 
 
 if __name__ == "__main__":
     rospy.init_node("hovermap_api_config")
-    pub = rospy.Publisher("perception_configuration", String, queue_size=10)
+    pub = rospy.Publisher("cortex/occupancy_grid_map/configuration", String, queue_size=10)
     msg = String()
     msg.data = get_perception_config()
     pub.publish(msg)

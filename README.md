@@ -21,11 +21,11 @@ or a USB-to-Ethernet adaptor
 ```bash
 sudo apt update
 sudo apt install chrony python3-catkin-tools -y
-mkdir -p hovermap_ros_api/src
-cd hovermap_ros_api/src
 git clone git@github.com:Emesent/hovermap_ros_api.git
+cd hovermap_ros_api
 rosdep install --from-paths src --ignore-src --rosdistro=${ROS_DISTRO} -y
-python3 -m pip install -r hovermap_ros_api/src/mule_bridge/requirements.txt
+# These are python dependency versions installed on the hovermap, but not a strict requirement
+python3 -m pip install -r src/mule_bridge/requirements.txt
 ```
 
 ### 2. Enable the Hovermap API
@@ -94,14 +94,15 @@ process[hovermap_api_mule-2]: started with pid [239]
 
 ``` bash
 $ rostopic list
-/hovermap_api_mule/status
-/odometry
-/perception_configuration
-/pointcloud
+/cortex/lidar/corrected
+/cortex/mule_bridge/status
+/cortex/occupancy_grid_map/configuration
+/cortex/occupancy_grid_map/data
+/cortex/odometry
+/cortex/tf
+/cortex/tf_static
 /rosout
 /rosout_agg
-/tf
-/tf_static
 ```
 
 7. Start a Mapping mission either on the Web UI or through Commander
@@ -112,21 +113,22 @@ $ rostopic list
 
 | Topic name                | Type                   | Description                      | Update Rate (Hz)  | Notes |
 |---------------------------|------------------------|----------------------------------|-------------------|-------|
-| /hovermap_api_mule/status | mule_bridge_msgs/Status| Internal mule status             | 1                 |
-| /tf_static                | tf_msgs/TFMessage      | Static transforms                | Once (latched)    | |
-| /tf                       | tf_msgs/TFMessage      | Non-static transform             | Variable          | |
-| /odometry                 | nav_msgs/Odometry      | SLAM corrected odometry          | 100               | |
-| /pointcloud               | sensor_msgs/PointCloud2| Occupancy grid for navigation    | 1                 | 256x256x256 grid; 0.25m resolution by default |
+| cortex/mule_bridge/status | mule_bridge_msgs/Status| Internal mule status             | 1                 |
+| cortex/lidar/corrected               | sensor_msgs/PointCloud2| SLAM corrected lidar point cloud    | 20                 | |
+| cortex/occupancy_grid_map/data               | sensor_msgs/PointCloud2| Occupancy grid for navigation    | 1                 | 160x160x160 grid; 0.25m resolution by default |
+| cortex/odometry                 | nav_msgs/Odometry      | SLAM corrected odometry          | 100               | |
+| cortex/tf                       | tf_msgs/TFMessage      | Non-static transform             | Variable          | |
+| cortex/tf_static                | tf_msgs/TFMessage      | Static transforms                | Once (latched)    | |
 
 ### Sent from client
 
 | Topic name                | Type                   | Description                        |
 |---------------------------|------------------------|------------------------------------|
-| /perception_configuration | std_msgs/String        | Occupancy grid config YAML endpoint|
+| cortex/occupancy_grid_map/configuration | std_msgs/String        | Occupancy grid config YAML endpoint|
 
 ### Topic details
 
-1. Transform tree (tf and tf_static)
+1. Transform tree (cortex/tf and cortex/tf_static)
     - The TF contains the depicted below
     - It follows [REP 105](https://www.ros.org/reps/rep-0105.html) convention
     - `hovermap_base` is the external reference point on hovermap and it is located as depicted below
@@ -135,19 +137,33 @@ $ rostopic list
 
 Tf tree             |  Reference axis
 :-------------------------:|:-------------------------:
-<img src="doc/images/tf_tree.png" width="450" /> | <img src="doc/images/st_reference_axis.png" width="450" />
+|<img src="doc/images/tf_tree.png" width="450" /> | <img src="doc/images/st_reference_axis.png" width="450" />|
 
 
-2. Odometry (/odometry)
+2. Odometry (cortex/odometry)
     - Local SLAM corrected odometry from `odom` to `hovermap_base`
     - If global (mission) corrected odometry is required the `map->odom` transform should be applied to the `odometry` value
     - Topic covariance is not populated
 
-3. Occupancy grid (/pointcloud)
+3. Occupancy grid (cortex/occupancy_grid_map/data)
     - Fixed size 3D occupancy grid describing local obstacles detected by the Hovermap
     - It is meant to be used for navigation purposes only
 
-4. Perception configuration (/perception_configuration)
+4. LiDAR corrected point cloud (cortex/lidar/corrected)
+    - SLAM corrected LiDAR data with the following packet structure:
+
+``` c++
+POINT_CLOUD_REGISTER_POINT_STRUCT(
+    PointXYZItime,
+    (float, x, x)(float, y, y)(float, z, z)
+    (double, timestamp, timestamp)
+    (float, intensity, intensity)
+    (std::uint8_t, ring, ring)
+    (std::uint8_t, returnNum, returnNum)
+);
+```
+
+5. Perception configuration (cortex/occupancy_grid_map/configuration)
     - The occupancy grid's parameters can be configured before a mission is launched. See [relevant section](#perception-configuration) for details
     - The configuration is sent to the Hovermap as a string representing a YAML file. A node is provided to do this.
     - The custom configuration is only used when using external_api, and is persistent across runs
@@ -210,20 +226,21 @@ The occupancy value is clamped within the [`occupied_min`, `occupied_max`] range
 ### Notes
 
 #### Performance
-The parameters chosen, in particular the dimensions and the voxel size, can affect the performance 
-at which the Hovermap's perception system runs. 
 
-To ensure nominal performance, the total number of voxels should be less than 70 million and the `voxel_size` 
+The parameters chosen, in particular the dimensions and the voxel size, can affect the performance 
+at which the Hovermap's perception system runs.
+
+To ensure nominal performance, the total number of voxels should be less or equal than 70 million and the `voxel_size` 
 should be between `0.05` and `0.25`.
 
 #### Persistency
-The configuration is *persistent* between boots, so it only needs to be configured once. 
+
+The configuration is *persistent* between boots, so it only needs to be configured once.
 Sending an empty config to the Hovermap will reset the configuration to the default.
 
-## Changing perception configuration
+## Changing occupancy grid map configuration
 
-1. Update the parameters in the [`perception_config.yaml`](./src/hovermap_api/config/perception_config.yaml) file in 
-the hovermap_api config directory
+1. Update the parameters in the [`perception_config.yaml`](./src/hovermap_api/config/perception_config.yaml) file in the hovermap_api config directory
 
 2. Build the hovermap_api package with `catkin build hovermap_api`
 
@@ -232,3 +249,9 @@ the hovermap_api config directory
 4. Run the perception configuration node with `rosrun hovermap_api configure_perception`
 
 5. Start a mapping mission to validate the changes to the occupancy grid
+
+## Known issues
+
+1. Topics on this client are under a `cortex` namespace. Changing or removing it will prevent from sending/receiving the topic data to the Hovermap. Note that the data frame ids do not contain the namespace.
+
+2. Sometimes the perception configuration is not set correctly on the first attempt. Running `rosrun hovermap_api configure_perception` twice fixes the issue.
