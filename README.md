@@ -6,29 +6,16 @@ ROS 1 meta-package to get access to the Hovermap online data through a client co
 
 The Hovermap API setup requires:
 
-- an Emesent Hovermap
-- a client computer running Ubuntu 20.04 LTS with ROS 1 Noetic installed
-- an Emesent Hovermap connected to the client computer with either Wi-Fi, a Hovermap ST Fischer-to-Ethernet interface,
-or a USB-to-Ethernet adaptor
+- an Emesent Hovermap with Cortex >= 4.0.2
+- a Ubuntu 20.04 LTS environment with ROS 1 Noetic installed (Dockerfile and scripts are provided to generate this if required)
+- an Emesent Hovermap accessible via:
+    - Wi-Fi, or
+    - a USB-to-Ethernet adaptor, or
+    - a Hovermap ST Fischer-to-Ethernet interface
 
-## Quick Start
+## Setup
 
-### 1. Install dependencies
-
-1. Install ROS noetic: <http://wiki.ros.org/noetic/Installation/Ubuntu>
-2. Install project dependencies and clone the project
-
-```bash
-sudo apt update
-sudo apt install chrony python3-catkin-tools -y
-git clone git@github.com:Emesent/hovermap_ros_api.git
-cd hovermap_ros_api
-rosdep install --from-paths src --ignore-src --rosdistro=${ROS_DISTRO} -y
-# These are python dependency versions installed on the hovermap, but not a strict requirement
-python3 -m pip install -r src/mule_bridge/requirements.txt
-```
-
-### 2. Enable the Hovermap API
+### 1. Enable the API on the Hovermap
 
 1. Power on Hovermap
 2. Connect to Hovermap via the Wi-Fi access point; SSID named after the Hovermap serial number (e.g. `st_0001`)
@@ -36,13 +23,13 @@ python3 -m pip install -r src/mule_bridge/requirements.txt
     1. Visit <http://hover.map> on a web browser
     2. Switch on the "Publish external API messages" option
 
-    <img src="doc/images/webui_switch.png" width="450" />
+    <img src="docs/images/webui_switch.png" width="450" />
 
     **Note**: if the option does not appear you will need to contact Emesent about an updated entitlement file.
 4. If you would like to use the external API over ethernet, turn off the "Use Wi-Fi for external API" switch
 5. Power cycle Hovermap and verify the external API is enabled by connecting as described below
 
-### 3. Connect to the Hovermap
+### 2. Connect to the Hovermap
 
 The API is configured to connect over either Wi-Fi or Ethernet on boot time with one of the following interfaces 
 with their specific configurations:
@@ -56,114 +43,128 @@ with their specific configurations:
 1. Connect to the Wi-Fi access point again or plug in the physical connection from your machine to the Hovermap if you are using Ethernet. 
 2. Set up a network profile with a manual static IP as specified in the "Client address" from the table
 
-<img src="doc/images/eth_profile.png" width="450" />
+    <img src="docs/images/eth_profile.png" width="450" />
 
 3. Check the connection to the Hovermap is setup correctly by pinging Hovermap
 
-```bash
-ping -c 5 192.168.2.115 # Hovermap address as specified in table above
-```
+    ```bash
+    ping -c 5 192.168.2.115 # Hovermap address as specified in table above
+    ```
 
-4. Edit the [mule.yaml](hovermap_api/config/mule.yaml) config file to fill out these values for the network interface 
+### 3. Setup the client
+
+We provide a Dockerfile and scripts in the [docker](docker) folder to assist with the image generation and container running.
+
+1. Clone the repository
+
+    ``` bash
+    git clone git@github.com:Emesent/hovermap_ros_api.git
+    ```
+
+2. Edit the [mule.yaml](hovermap_api/config/mule.yaml) config file to fill out these values for the network interface 
 used for your connection.
 
-```yaml
-mule_network: "your_network_interface" # The client computer's active network interface name
-ip_prefix: "192.168.2.0"               # as in the table
-ip_netmask: "255.255.255.0"            # as in the table
-```
+    ```yaml
+    mule_network: "your_network_interface" # The client computer's active network interface name
+    ip_prefix: "192.168.2.0"               # as in the table
+    ip_netmask: "255.255.255.0"            # as in the table
+    ```
 
-5. Build and launch the Hovermap API
+3. Build the Dockerfile and run the container
 
-```bash
-catkin build hovermap_api
-source <path_to_workspace>/install/setup.bash
-roslaunch hovermap_api api.launch
-```
+    ``` bash
+    cd hovermap_ros_api
+    ./docker/build_docker
+    ./docker/run_docker
+    ```
 
-6. Verify the API connection works successfully by checking the rosout and getting this message:
+4. Run the client and Verify the API connection works successfully by checking the rosout and getting this message:
 
-```yaml
-started core service [/rosout]
-process[hovermap_api_mule-2]: started with pid [239]
-[INFO] [1689641473.095754]: Delay started (give subscribers time to connect)
-[INFO] [1689209676.101692]: Delay finished
-[INFO] [1689209676.609904, 2930.950000]: Added peer st_0001 at tcp://192.168.2.115:{49184,49189}
-[INFO] [1689209676.613040, 2930.959000]: Connected to st_0001 at tcp://192.168.2.115:49189
-```
+    ```bash
+    started core service [/rosout]
+    process[hovermap_api_mule-2]: started with pid [239]
+    [INFO] [1689641473.095754]: Delay started (give subscribers time to connect)
+    [INFO] [1689209676.101692]: Delay finished
+    [INFO] [1689209676.609904, 2930.950000]: Added peer st_0001 at tcp://192.168.2.115:{49184,49189}
+    [INFO] [1689209676.613040, 2930.959000]: Connected to st_0001 at tcp://192.168.2.115:49189
+    ```
 
-``` bash
-$ rostopic list
-/cortex/lidar/corrected
-/cortex/mule_bridge/status
-/cortex/occupancy_grid_map/configuration
-/cortex/occupancy_grid_map/data
-/cortex/odometry
-/cortex/tf
-/cortex/tf_static
-/rosout
-/rosout_agg
-```
+    On a different shell check the `rostopic list` output is:
 
-7. Start a Mapping mission either on the Web UI or through Commander
+    ``` bash
+    /cortex/lidar/corrected
+    /cortex/mule_bridge/status
+    /cortex/occupancy_grid_map/configuration
+    /cortex/occupancy_grid_map/data
+    /cortex/odometry
+    /cortex/tf
+    /cortex/tf_static
+    /rosout
+    /rosout_agg
+    ```
+
+### 4. Start a Mapping mission
+
+1. Start a Mapping mission either on the Web UI or through Commander. 
+2. Once the mission is fully running, check there is data coming through the topics (e.g. `rostopic hz /cortex/occupancy_grid_map/data`).
 
 ## API ROS topics
 
 ### Received from Hovermap
 
-| Topic name                | Type                   | Description                      | Update Rate (Hz)  | Notes |
-|---------------------------|------------------------|----------------------------------|-------------------|-------|
-| cortex/mule_bridge/status | mule_bridge_msgs/Status| Internal mule status             | 1                 |
-| cortex/lidar/corrected               | sensor_msgs/PointCloud2| SLAM corrected lidar point cloud    | 20                 | |
-| cortex/occupancy_grid_map/data               | sensor_msgs/PointCloud2| Occupancy grid for navigation    | 1                 | 160x160x160 grid; 0.25m resolution by default |
-| cortex/odometry                 | nav_msgs/Odometry      | SLAM corrected odometry          | 100               | |
-| cortex/tf                       | tf_msgs/TFMessage      | Non-static transform             | Variable          | |
-| cortex/tf_static                | tf_msgs/TFMessage      | Static transforms                | Once (latched)    | |
+| Topic name                        | Type                   | Description                      | Update Rate (Hz)  | Notes            |
+|-----------------------------------|------------------------|----------------------------------|-------------------|------------------|
+| cortex/mule_bridge/status         | mule_bridge_msgs/Status| Internal mule status             | 1                 | in `/odom` frame |
+| cortex/lidar/corrected            | sensor_msgs/PointCloud2| SLAM corrected lidar point cloud | 20                | in `/odom` frame |
+| cortex/occupancy_grid_map/data    | sensor_msgs/PointCloud2| Occupancy grid for navigation    | 1                 | 160x160x160 grid; 0.25m resolution by default |
+| cortex/odometry                   | nav_msgs/Odometry      | SLAM corrected odometry          | 100               |                  |
+| cortex/tf                         | tf_msgs/TFMessage      | Non-static transform             | Variable          |                  |
+| cortex/tf_static                  | tf_msgs/TFMessage      | Static transforms                | Once (latched)    |                  |
 
 ### Sent from client
 
-| Topic name                | Type                   | Description                        |
-|---------------------------|------------------------|------------------------------------|
-| cortex/occupancy_grid_map/configuration | std_msgs/String        | Occupancy grid config YAML endpoint|
+| Topic name                                | Type                   | Description                        |
+|-------------------------------------------|------------------------|------------------------------------|
+| cortex/occupancy_grid_map/configuration   | std_msgs/String        | Occupancy grid config YAML endpoint|
 
 ### Topic details
 
-1. Transform tree (cortex/tf and cortex/tf_static)
+1. Transform tree (`cortex/tf and cortex/tf_static`)
     - The TF contains the depicted below
     - It follows [REP 105](https://www.ros.org/reps/rep-0105.html) convention
     - `hovermap_base` is the external reference point on hovermap and it is located as depicted below
     - `hovermap_base` and `base_link` are coincident when hovermap is attached to an unsupported robotic platform
     - `base_link` referenced the robot reference axis for navigation and control purposes when attached to a supported robotic platform
 
-Tf tree             |  Reference axis
-:-------------------------:|:-------------------------:
-|<img src="doc/images/tf_tree.png" width="450" /> | <img src="doc/images/st_reference_axis.png" width="450" />|
+    Tf tree                                           |  Reference axis
+    :------------------------------------------------:|:----------------------------------------------------------:
+    |<img src="docs/images/tf_tree.png" width="450" /> | <img src="docs/images/st_reference_axis.png" width="450" />|
 
 
-2. Odometry (cortex/odometry)
+2. Odometry (`cortex/odometry`)
     - Local SLAM corrected odometry from `odom` to `hovermap_base`
     - If global (mission) corrected odometry is required the `map->odom` transform should be applied to the `odometry` value
     - Topic covariance is not populated
 
-3. Occupancy grid (cortex/occupancy_grid_map/data)
+3. Occupancy grid (`cortex/occupancy_grid_map/data`)
     - Fixed size 3D occupancy grid describing local obstacles detected by the Hovermap
     - It is meant to be used for navigation purposes only
 
-4. LiDAR corrected point cloud (cortex/lidar/corrected)
+4. LiDAR corrected point cloud (`cortex/lidar/corrected`)
     - SLAM corrected LiDAR data with the following packet structure:
 
-``` c++
-POINT_CLOUD_REGISTER_POINT_STRUCT(
-    PointXYZItime,
-    (float, x, x)(float, y, y)(float, z, z)
-    (double, timestamp, timestamp)
-    (float, intensity, intensity)
-    (std::uint8_t, ring, ring)
-    (std::uint8_t, returnNum, returnNum)
-);
-```
+    ``` c++
+    POINT_CLOUD_REGISTER_POINT_STRUCT(
+        PointXYZItime,
+        (float, x, x)(float, y, y)(float, z, z)
+        (double, timestamp, timestamp)
+        (float, intensity, intensity)
+        (std::uint8_t, ring, ring)
+        (std::uint8_t, returnNum, returnNum)
+    );
+    ```
 
-5. Perception configuration (cortex/occupancy_grid_map/configuration)
+5. Perception configuration (`cortex/occupancy_grid_map/configuration`)
     - The occupancy grid's parameters can be configured before a mission is launched. See [relevant section](#perception-configuration) for details
     - The configuration is sent to the Hovermap as a string representing a YAML file. A node is provided to do this.
     - The custom configuration is only used when using external_api, and is persistent across runs
@@ -214,7 +215,7 @@ The Hovermap ROS API publishes an occupancy grid that can be configured for your
 | dimensions/y       | int   | Number of voxels in the y axis of the grid      |
 | dimensions/z       | int   | Number of voxels in the z axis of the grid      |
 
-The occupancy grid holds unitless occupancy values that represents how likely it is to be occupied.
+The occupancy grid holds unitless occupancy values that represent how likely it is to be occupied.
 
 When a LiDAR point is detected in a voxel, the occupancy is increased by `on_hit`. When the LiDAR point
 is raycasted to, the occupancy value of the voxels it did not hit is increased by `on_miss`.
@@ -230,8 +231,7 @@ The occupancy value is clamped within the [`occupied_min`, `occupied_max`] range
 The parameters chosen, in particular the dimensions and the voxel size, can affect the performance 
 at which the Hovermap's perception system runs.
 
-To ensure nominal performance, the total number of voxels should be less or equal than 70 million and the `voxel_size` 
-should be between `0.05` and `0.25`.
+To ensure nominal performance, the total number of voxels should be less than or equal to 70 million and the `voxel_size` should be between `0.05` and `0.25`.
 
 #### Persistency
 
@@ -252,6 +252,6 @@ Sending an empty config to the Hovermap will reset the configuration to the defa
 
 ## Known issues
 
-1. Topics on this client are under a `cortex` namespace. Changing or removing it will prevent from sending/receiving the topic data to the Hovermap. Note that the data frame ids do not contain the namespace.
+1. Topics on this client are under a `cortex` namespace. Changing or removing it will prevent Cortex from sending/receiving the topic data to/from the Hovermap. Note that the data frame ids do not contain the namespace.
 
 2. Sometimes the perception configuration is not set correctly on the first attempt. Running `rosrun hovermap_api configure_perception` twice fixes the issue.

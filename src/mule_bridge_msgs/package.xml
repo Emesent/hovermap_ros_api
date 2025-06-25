@@ -3,9 +3,11 @@
   <name>mule_bridge_msgs</name>
   <version>1.0.0</version>
   <description>Message definitions for mule_bridge.</description>
+
   <!-- Emesent maintainer -->
-  <maintainer email="raghav.mishra@emesent.io">Raghav Mishra</maintainer>
-  <license>Proprietary</license>
+  <maintainer email="emili.hernandez@emesent.io">Emili Hernandez</maintainer>
+  
+  <license>CSIRO Open Source Software Licence Agreement</license>
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>message_generation</build_depend>
   <exec_depend>message_runtime</exec_depend>

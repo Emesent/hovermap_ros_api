@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+# Script to build the Docker image for the hovermap_ros_api.
+set -euo pipefail
+
+IMAGE_NAME="hovermap_ros_api_image"
+REPO_ROOT="$(dirname "$(realpath "$0")")/.."
+
+cd "$REPO_ROOT"
+docker build -t "${IMAGE_NAME}" -f docker/Dockerfile .

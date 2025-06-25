@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+# Script to run the Docker container for the hovermap_ros_api.
+# ensure using the host network to prevent connection issues.
+
+set -euo pipefail
+
+IMAGE_NAME="hovermap_ros_api_image"
+REPO_ROOT="$(dirname "$(realpath "$0")")/.."
+docker run -it --rm --network=host --mount type=bind,src="$REPO_ROOT/src",dst=/ros_ws/src "${IMAGE_NAME}"
