@@ -18,7 +18,7 @@ RUN apt update && apt install -y \
 
 # Build the repo into the context
 RUN --mount=type=bind,src=src/,dst=/ros_ws/src \
-    python3 -m pip install -r src/mule_bridge/requirements.txt && \
+    python3 -m pip install -r src/mule_bridge/mule_bridge/requirements.txt && \
     source /opt/ros/noetic/setup.bash && \
     catkin init && \
     catkin config --install && \
