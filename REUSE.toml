@@ -1,0 +1,14 @@
+version = 1
+SPDX-PackageName = "hovermap_ros_api"
+SPDX-PackageSupplier = "Emesent Pty Ltd"
+SPDX-PackageDownloadLocation = "https://github.com/Emesent/hovermap_ros_api"
+
+[[annotations]]
+path = "**"
+SPDX-FileCopyrightText = "2023 Emesent Pty Ltd"
+SPDX-License-Identifier = "MIT License"
+
+[[annotations]]
+path = "src/mule_bridge/"
+SPDX-FileCopyrightText = "2022 Commonwealth Scientific and Industrial Research Organisation (CSIRO)"
+SPDX-License-Identifier = "CSIRO Open Source Software Licence Agreement"
