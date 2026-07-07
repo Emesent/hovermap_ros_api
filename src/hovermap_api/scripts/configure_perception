@@ -13,7 +13,9 @@ def get_perception_config() -> str:
 
 if __name__ == "__main__":
     rospy.init_node("hovermap_api_config")
-    pub = rospy.Publisher("cortex/occupancy_grid_map/configuration", String, queue_size=10)
+    pub = rospy.Publisher(
+        "cortex/occupancy_grid_map/configuration", String, queue_size=10
+    )
     msg = String()
     msg.data = get_perception_config()
     pub.publish(msg)
