@@ -86,9 +86,3 @@ class TestProtocol(unittest.TestCase):
             mule_bridge.loads_sync_reply(mule_bridge.dumps_sync_reply(sync_reply)),
             sync_reply,
         )
-
-
-if __name__ == "__main__":
-    import rosunit
-
-    rosunit.unitrun("test_mule_bridge", "test_protocol", TestProtocol)

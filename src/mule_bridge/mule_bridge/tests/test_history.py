@@ -1,6 +1,6 @@
 import unittest
 
-import mule_bridge
+import mule_bridge # TODO FIX me tests fail to find zmq
 
 
 def size(blobs):
@@ -108,9 +108,3 @@ class TestHistory(unittest.TestCase):
             ),
             2.0,
         )
-
-
-if __name__ == "__main__":
-    import rosunit
-
-    rosunit.unitrun("test_mule_bridge", "test_history", TestHistory)

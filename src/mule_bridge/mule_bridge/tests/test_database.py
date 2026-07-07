@@ -456,9 +456,3 @@ class TestDatabase(unittest.TestCase):
             ),
             2.0,
         )
-
-
-if __name__ == "__main__":
-    import rosunit
-
-    rosunit.unitrun("test_mule_bridge", "test_database", TestDatabase)
