@@ -5,8 +5,8 @@ swarm_name: "hvm"
 node_name: "hvm_client"
 
 # Change this network configuration to match your desired network interface
-mule_network: "enxc03ebad2cd9c"
-ip_prefix: "192.168.2.0"
+mule_network: "wlp146s0"
+ip_prefix: "10.9.0.0"
 ip_netmask: "255.255.255.0"
 
 # Network ports that the Hovermap API operates over

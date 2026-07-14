@@ -11,6 +11,7 @@
   <!-- Dependencies -->
   <buildtool_depend>catkin</buildtool_depend>
   <exec_depend>mule_bridge</exec_depend>
+  <depend>hovermap_api_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
