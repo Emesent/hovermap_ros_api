@@ -3,4 +3,8 @@
     <node pkg="mule_bridge" name="mule_bridge" type="mule_bridge" required="true" output="screen" ns="cortex">
         <rosparam command="load" file="$(find hovermap_api)/config/mule.yaml"/>
     </node>
+
+    <node pkg="hovermap_api" name="http_interface_node" type="http_interface_node" output="screen" ns="cortex">
+        <rosparam command="load" file="$(find hovermap_api)/config/mule.yaml"/>
+    </node>
 </launch>

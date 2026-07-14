@@ -1,0 +1,4 @@
+string scan_prefix
+string current_scan_name
+string free_space
+bool scan_running

@@ -92,11 +92,19 @@ used for your connection.
     On a different shell check the `rostopic list` output is:
 
     ``` bash
+    /cortex/download_scan
+    /cortex/hovermap_status
     /cortex/lidar/corrected
     /cortex/mule_bridge/status
     /cortex/occupancy_grid_map/configuration
     /cortex/occupancy_grid_map/data
     /cortex/odometry
+    /cortex/scan_download_successful
+    /cortex/scan_names_request
+    /cortex/scan_names_response
+    /cortex/set_scan_prefix
+    /cortex/start_scan
+    /cortex/stop_scan
     /cortex/tf
     /cortex/tf_static
     /rosout
@@ -120,12 +128,20 @@ used for your connection.
 | cortex/odometry                   | nav_msgs/Odometry      | SLAM corrected odometry          | 100               |                  |
 | cortex/tf                         | tf_msgs/TFMessage      | Non-static transform             | Variable          |                  |
 | cortex/tf_static                  | tf_msgs/TFMessage      | Static transforms                | Once (latched)    |                  |
+| cortex/hovermap_status            | hovermap_api_msgs/HovermapStatus | Hovermap and current scan status | 1        |                  |
+| cortex/scan_names_response        | hovermap_api_msgs/ScanInformationList | List of scans stored on the Hovermap newest to oldest | On request | Reply to `cortex/scan_names_request` |
+| cortex/scan_download_successful   | std_msgs/Bool          | Outcome of a scan download: `true` on success, `false` on failure | On download completion | Published after each `cortex/download_scan` request finishes |
 
 ### Sent from client
 
 | Topic name                                | Type                   | Description                        |
 |-------------------------------------------|------------------------|------------------------------------|
 | cortex/occupancy_grid_map/configuration   | std_msgs/String        | Occupancy grid config YAML endpoint|
+| cortex/scan_names_request                 | std_msgs/Empty         | Request the list of stored scans   |
+| cortex/set_scan_prefix                    | std_msgs/String        | Set the prefix used to name new scans |
+| cortex/start_scan                         | std_msgs/Empty         | Start a mapping scan                |
+| cortex/stop_scan                          | std_msgs/Empty         | Stop the current mapping scan       |
+| cortex/download_scan                      | std_msgs/String        | Download a stored scan by name      |
 
 ### Topic details
 
@@ -168,6 +184,34 @@ used for your connection.
     - The occupancy grid's parameters can be configured before a mission is launched. See [relevant section](#perception-configuration) for details
     - The configuration is sent to the Hovermap as a string representing a YAML file. A node is provided to do this.
     - The custom configuration is only used when using external_api, and is persistent across runs
+
+6. Hovermap status (`cortex/hovermap_status`)
+    - Reports the current status of the Hovermap and any scan in progress. The `HovermapStatus` message contains:
+        - `scan_prefix`: the prefix currently applied when naming new scans (see `cortex/set_scan_prefix`)
+        - `current_scan_name`: the name of the current or most recent scan
+        - `free_space`: the storage available on the Hovermap, in bytes
+        - `scan_running`: `true` while a scan is in progress (including while it is starting up), `false` otherwise
+
+7. Setting the scan prefix (`cortex/set_scan_prefix`)
+    - Publish a `std_msgs/String` to `cortex/set_scan_prefix` to set the prefix used when naming new scans. New scans are named `<prefix>_NN` where NN is a number starting at 01 and incremented after each scan is started.  The prefix is persistent across boots.
+
+8. Starting and stopping a scan (`cortex/start_scan`, `cortex/stop_scan`)
+    - Publish a `std_msgs/Empty` to `cortex/start_scan` to start a mapping scan, or to `cortex/stop_scan` to stop the current scan.
+    - Starting and stopping can take a few seconds
+
+9. Listing stored scans (`cortex/scan_names_request` → `cortex/scan_names_response`)
+    - Publish a `std_msgs/Empty` to `cortex/scan_names_request` to request the list of scans stored on the Hovermap
+    - The Hovermap replies on `cortex/scan_names_response` with a `ScanInformationList`, ordered newest first.  `ScanInformationList` and its constituent `ScanInformation` messages are custom messages available in `hovermap_api_msgs`. Each `ScanInformation` entry contains:
+        - `name`: the scan name, as used by `cortex/download_scan`
+        - `size`: the size of the scan on the Hovermap, in bytes (the downloaded archive is compressed and will be smaller)
+
+10. Downloading a scan (`cortex/download_scan`)
+    - Publish a `std_msgs/String` containing a scan `name` (from `cortex/scan_names_response`) to download that scan
+    - Scans with duration greater than 1.5 hours may cause the bridge to timeout while waiting for hovermap to prepare the scan for download.  These scans can still be downloaded manually using a USB key or the webui.
+    - The scan is saved as `<name>.zip` in `/data/downloads`. Bind-mount a host directory to this location by passing it to `run_docker` (e.g. `./docker/run_docker ~/hovermap_scans`) to retrieve downloads on the client machine.
+    - A scan cannot be downloaded while a scan is running, or while another download is already in progress
+    - Download progress is reported in rosout
+    - When the download finishes, a `std_msgs/Bool` is published on `cortex/scan_download_successful` reporting the outcome: `true` if the scan was downloaded successfully, `false` if it failed (e.g. a scan is running, another download is in progress, or a network error occurred)
 
 ## Time Synchronisation
 

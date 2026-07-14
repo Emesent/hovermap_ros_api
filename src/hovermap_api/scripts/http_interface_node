@@ -1,0 +1,187 @@
+#!/usr/bin/python3
+import json
+import os
+import threading
+import rospy
+import urllib.request
+import urllib.error
+from std_msgs.msg import Bool, Empty, String
+from hovermap_api_msgs.msg import ScanInformation, ScanInformationList, HovermapStatus
+
+# Maps ip_prefix from mule.yaml to the actual Hovermap address
+IP_PREFIX_TO_ADDRESS = {
+    "192.168.2.0": "192.168.2.115",
+    "192.168.3.0": "192.168.3.115",
+    "10.9.0.0": "10.9.0.1",
+}
+
+DOWNLOAD_DIR = "/data/downloads"
+
+STATUS_POLL_INTERVAL = 1  # seconds
+SCAN_DOWNLOAD_PREP_TIMEOUT = 450.0  # seconds to wait for zip file to be generated
+
+# Payload states (from the /status "state" field) that do NOT correspond to a
+# running scan. Every other state is a scan actively running or transitioning
+# through the start/stop sequence, so scan_running is True for them.
+NON_RUNNING_STATES = frozenset(
+    {
+        "Stopped",
+        "Disabled",
+        "Booting",
+        "USB Error",
+        "USB Mounted",
+        "Transferring Data",
+        "Processes Stopped",
+    }
+)
+
+
+class HttpInterfaceNode:
+    def __init__(self):
+        rospy.init_node("http_interface_node")
+
+        ip_prefix = rospy.get_param("~ip_prefix")
+        assert isinstance(ip_prefix, str)  # To make pyright happy
+        if ip_prefix not in IP_PREFIX_TO_ADDRESS:
+            rospy.logfatal(f"Unknown ip_prefix: {ip_prefix}")
+            raise RuntimeError(f"Unknown ip_prefix: {ip_prefix}")
+
+        self._base_url = f"http://{IP_PREFIX_TO_ADDRESS[ip_prefix]}"
+
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+        rospy.Subscriber("start_scan", Empty, self._on_start_scan)
+        rospy.Subscriber("stop_scan", Empty, self._on_stop_scan)
+        rospy.Subscriber("scan_names_request", Empty, self._on_scan_names_request)
+        rospy.Subscriber("download_scan", String, self._on_download_scan)
+        rospy.Subscriber("set_scan_prefix", String, self._on_set_scan_prefix)
+
+        self._scan_names_pub = rospy.Publisher(
+            "scan_names_response", ScanInformationList, queue_size=5
+        )
+        self._status_pub = rospy.Publisher(
+            "hovermap_status", HovermapStatus, queue_size=5
+        )
+        self._scan_download_successful_pub = rospy.Publisher(
+            "scan_download_successful", Bool, queue_size=5
+        )
+
+        rospy.Timer(rospy.Duration(STATUS_POLL_INTERVAL), self._poll_status)
+
+        rospy.loginfo(f"http_interface_node ready, target: {self._base_url}")
+
+    def _get(self, path, log=True):
+        url = f"{self._base_url}{path}"
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5.0) as response:
+                body = response.read().decode()
+                if log:
+                    rospy.loginfo(f"GET {url} -> {response.status}: {body}")
+                return body
+        except urllib.error.HTTPError as e:
+            rospy.logerr(f"GET {url} failed: HTTP {e.code} {e.reason}")
+            return None
+        except urllib.error.URLError as e:
+            rospy.logerr(f"GET {url} failed: {e.reason}")
+            return None
+
+    def _on_start_scan(self, msg):
+        self._get("/startsystem?mission_type=1")
+
+    def _on_stop_scan(self, msg):
+        self._get("/stopsystem")
+
+    def _on_scan_names_request(self, msg):
+        body = self._get("/files")
+        if body is None:
+            return
+        try:
+            data = json.loads(body)
+            scans = sorted(data.get("scans", []), key=lambda s: s["time"], reverse=True)
+            scan_list = ScanInformationList()
+            for scan in scans:
+                info = ScanInformation()
+                info.name = scan["scan"]
+                info.size = scan["size"]
+                scan_list.scans.append(info)  # pyright: ignore[reportOptionalMemberAccess]
+            self._scan_names_pub.publish(scan_list)
+        except (json.JSONDecodeError, KeyError) as e:
+            rospy.logerr(f"Failed to parse /files response: {e}")
+
+    def _on_download_scan(self, msg):
+        thread = threading.Thread(
+            target=self._download_scan, args=(msg.data,), daemon=True
+        )
+        thread.start()
+
+    def _download_scan(self, scan_name):
+        """Downloads the specified scans from the Hovermap.
+
+        Hovermap will abort returning a HTTP 404 error if a scan is running, or
+        if you are already downloading a scan, so we don't need guards
+        """
+        url = f"{self._base_url}/downloadscan?scanname={scan_name}"
+        output_path = os.path.join(DOWNLOAD_DIR, f"{scan_name}.zip")
+        rospy.loginfo(f"Downloading scan '{scan_name}' to {output_path}")
+        result_msg = Bool()
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(
+                req, timeout=SCAN_DOWNLOAD_PREP_TIMEOUT
+            ) as response:
+                rospy.loginfo("Zip file generation completed, starting download...")
+                total_size = int(response.headers.get("Content-Length", 0))
+                downloaded = 0
+                last_logged_pct = 0
+                with open(output_path, "wb") as f:
+                    while True:
+                        chunk = response.read(1048576)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+                        # Progress messages
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            pct = (downloaded * 100) // total_size
+                            if pct >= last_logged_pct + 10:
+                                last_logged_pct = pct - (pct % 10)
+                                rospy.loginfo(
+                                    f"Download '{scan_name}': {last_logged_pct}%"
+                                )
+            rospy.loginfo(f"Download complete: {output_path}")
+            result_msg.data = True
+            self._scan_download_successful_pub.publish(result_msg)
+        except urllib.error.HTTPError as e:
+            rospy.logerr(f"Download failed for '{scan_name}': HTTP {e.code} {e.reason}")
+            self._scan_download_successful_pub.publish(result_msg)
+        except urllib.error.URLError as e:
+            rospy.logerr(f"Download failed for '{scan_name}': {e.reason}")
+            self._scan_download_successful_pub.publish(result_msg)
+
+    def _on_set_scan_prefix(self, msg):
+        self._get(f"/setprefix?prefix={msg.data}")
+
+    def _poll_status(self, event):
+        body = self._get("/status", log=False)
+        if body is None:
+            return
+        try:
+            data = json.loads(body)
+            status = HovermapStatus()
+            status.scan_prefix = data["scan_name"]
+            status.current_scan_name = data["scan_dir"]
+            status.free_space = data["freeSpace"]
+            status.scan_running = data["state"] not in NON_RUNNING_STATES
+            self._status_pub.publish(status)
+        except (json.JSONDecodeError, KeyError) as e:
+            rospy.logerr(f"Failed to parse /status response: {e}")
+
+    def spin(self):
+        rospy.spin()
+
+
+if __name__ == "__main__":
+    node = HttpInterfaceNode()
+    node.spin()
