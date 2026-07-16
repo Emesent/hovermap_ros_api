@@ -2,9 +2,38 @@
 
 # Script to run the Docker container for the hovermap_ros_api.
 # ensure using the host network to prevent connection issues.
+# Usage: run_docker [download_directory]
 
 set -euo pipefail
 
+usage() {
+    echo "Usage: $(basename "$0") [download_directory]"
+    echo ""
+    echo "Run the hovermap_ros_api Docker container."
+    echo ""
+    echo "Arguments:"
+    echo "  download_directory  Optional host directory to bind-mount for scan downloads"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help          Show this help message and exit"
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+    usage
+    exit 0
+fi
+
 IMAGE_NAME="hovermap_ros_api_image"
 REPO_ROOT="$(dirname "$(realpath "$0")")/.."
-docker run -it --rm --network=host --mount type=bind,src="$REPO_ROOT/src",dst=/ros_ws/src "${IMAGE_NAME}"
+
+EXTRA_MOUNTS=()
+if [[ $# -ge 1 ]]; then
+    DOWNLOAD_DIR="$(realpath "$1")"
+    mkdir -p "$DOWNLOAD_DIR"
+    EXTRA_MOUNTS=(--mount "type=bind,src=$DOWNLOAD_DIR,dst=/data/downloads")
+fi
+
+docker run -it --rm --network=host \
+    --mount type=bind,src="$REPO_ROOT/src",dst=/ros_ws/src \
+    "${EXTRA_MOUNTS[@]}" \
+    "${IMAGE_NAME}"
